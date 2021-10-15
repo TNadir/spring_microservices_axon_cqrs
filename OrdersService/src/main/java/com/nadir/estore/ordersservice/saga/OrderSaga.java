@@ -13,6 +13,8 @@ import com.nadir.estore.ordersservice.command.commands.RejectOrderCommand;
 import com.nadir.estore.ordersservice.core.events.OrderApprovedEvent;
 import com.nadir.estore.ordersservice.core.events.OrderCreatedEvent;
 import com.nadir.estore.ordersservice.core.events.OrderRejectedEvent;
+import com.nadir.estore.ordersservice.core.model.OrderSummary;
+import com.nadir.estore.ordersservice.query.FindOrderQuery;
 import org.axonframework.commandhandling.CommandCallback;
 import org.axonframework.commandhandling.CommandMessage;
 import org.axonframework.commandhandling.CommandResultMessage;
@@ -24,6 +26,7 @@ import org.axonframework.modelling.saga.EndSaga;
 import org.axonframework.modelling.saga.SagaEventHandler;
 import org.axonframework.modelling.saga.StartSaga;
 import org.axonframework.queryhandling.QueryGateway;
+import org.axonframework.queryhandling.QueryUpdateEmitter;
 import org.axonframework.spring.stereotype.Saga;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,19 +41,26 @@ import java.util.concurrent.TimeUnit;
 public class OrderSaga {
 
     public static final String PROCESS_PAYMENT_DEADLINE = "process-payment-deadline";
+
     private final Logger LOGGER = LoggerFactory.getLogger(OrderSaga.class);
 
     private String scheduleId = null;
 
-    @Autowired
-    private transient CommandGateway commandGateway;
+    private final transient CommandGateway commandGateway;
+
+    private final transient QueryGateway queryGateway;
+
+    private final transient QueryUpdateEmitter queryUpdateEmitter;
+
+    private final transient DeadlineManager deadlineManager;
 
     @Autowired
-    private transient QueryGateway queryGateway;
-
-
-    @Autowired
-    private transient DeadlineManager deadlineManager;
+    public OrderSaga(CommandGateway commandGateway, QueryGateway queryGateway, QueryUpdateEmitter queryUpdateEmitter, DeadlineManager deadlineManager) {
+        this.commandGateway = commandGateway;
+        this.queryGateway = queryGateway;
+        this.queryUpdateEmitter = queryUpdateEmitter;
+        this.deadlineManager = deadlineManager;
+    }
 
     @StartSaga
     @SagaEventHandler(associationProperty = "orderId")
@@ -174,7 +184,10 @@ public class OrderSaga {
     public void handle(OrderApprovedEvent orderApprovedEvent) {
 
         LOGGER.info("Order is approved: " + orderApprovedEvent);
-
+        queryUpdateEmitter.emit(FindOrderQuery.class,
+                                q -> true,
+                                new OrderSummary(orderApprovedEvent.getOrderId(),
+                                                 orderApprovedEvent.getOrderStatus()));
     }
 
     @SagaEventHandler(associationProperty = "orderId")
@@ -190,6 +203,12 @@ public class OrderSaga {
     @SagaEventHandler(associationProperty = "orderId")
     public void handle(OrderRejectedEvent orderRejectedEvent) {
         LOGGER.info("Order was successfully rejected");
+
+        queryUpdateEmitter.emit(FindOrderQuery.class,
+                q -> true,
+                new OrderSummary(orderRejectedEvent.getOrderId(),
+                                 orderRejectedEvent.getOrderStatus(),
+                                 orderRejectedEvent.getReason()));
     }
 
     @DeadlineHandler(deadlineName = PROCESS_PAYMENT_DEADLINE)
